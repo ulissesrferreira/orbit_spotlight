@@ -1,6 +1,6 @@
 @echo off
 echo ===================================
-echo   CtrlK Launcher — Instalando...
+echo   Orbit Spotlight — Instalando...
 echo ===================================
 echo.
 
@@ -19,6 +19,6 @@ python -m pip install PyQt5 --quiet
 
 echo.
 echo [OK] Instalacao concluida!
-echo Execute "2_executar.bat" para abrir o CtrlK.
+echo Execute "2_executar.bat" para abrir o Orbit Spotlight.
 echo.
 pause

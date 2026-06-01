@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbit-spotlight"
+version = "1.0.0"
+description = "Launcher rápido para Windows — busca arquivos, pastas e apps com Ctrl+'"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ulissesrferreira" }]
+keywords = ["launcher", "search", "windows", "spotlight", "productivity"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Topic :: Desktop Environment",
+]
+dependencies = ["PyQt5>=5.15"]
+
+[project.scripts]
+orbit-spotlight = "orbit_spotlight:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["orbit_spotlight*"]

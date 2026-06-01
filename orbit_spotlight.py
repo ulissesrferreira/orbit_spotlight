@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CtrlK Launcher — Quick file, folder & app search for Windows
+Orbit Spotlight — Quick file, folder & app search for Windows
 Press Ctrl+apostrophe anywhere to open/close the launcher.
 """
 
@@ -59,7 +59,7 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".html",
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"}
 
 # File where we track app usage counts
-USAGE_FILE = Path(os.environ.get("APPDATA", "")) / "CtrlKLauncher" / "usage.json"
+USAGE_FILE = Path(os.environ.get("APPDATA", "")) / "OrbitSpotlight" / "usage.json"
 
 FILE_ICONS = {
     ".jpg": "🖼️", ".jpeg": "🖼️", ".png": "🖼️", ".webp": "🖼️", ".gif": "🖼️", ".svg": "🖼️",
@@ -106,7 +106,7 @@ def open_in_antigravity(path: str) -> bool:
         subprocess.Popen([ANTIGRAVITY_EXE, path])
         return True
     except Exception as e:
-        print(f"[CtrlK] Erro ao abrir no Antigravity: {e}")
+        print(f"[OrbitSpotlight] Erro ao abrir no Antigravity: {e}")
         return False
 
 
@@ -880,7 +880,7 @@ class Launcher(QWidget):
             try:
                 subprocess.Popen(["explorer", path])
             except Exception as e:
-                print(f"[CtrlK] Erro ao abrir: {e}")
+                print(f"[OrbitSpotlight] Erro ao abrir: {e}")
         self.hide()
 
     def _open_antigravity(self, idx: int):
@@ -912,7 +912,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("CtrlK Launcher")
+    app.setApplicationName("Orbit Spotlight")
 
     # Ícone de lupa (desenhado em alta resolução para ficar nítido)
     px = QPixmap(64, 64)
@@ -931,10 +931,10 @@ def main():
     painter.end()
 
     tray = QSystemTrayIcon(QIcon(px), app)
-    tray.setToolTip("CtrlK Launcher  —  Ctrl+' para abrir")
+    tray.setToolTip("Orbit Spotlight  —  Ctrl+' para abrir")
 
     tray_menu = QMenu()
-    act_show = QAction("Abrir  (Ctrl+')", tray_menu)
+    act_show = QAction("Abrir Orbit Spotlight  (Ctrl+')", tray_menu)
     act_quit = QAction("Fechar", tray_menu)
     tray_menu.addAction(act_show)
     tray_menu.addSeparator()
@@ -967,7 +967,7 @@ def main():
             keyboard.add_hotkey("ctrl+'", toggle_launcher)
             _hotkey_state["ok"] = True
         except Exception as e:
-            print(f"[CtrlK] Falha ao registrar atalho (tentativa "
+            print(f"[OrbitSpotlight] Falha ao registrar atalho (tentativa "
                   f"{_hotkey_state['tries']}): {e}")
             if _hotkey_state["tries"] < 10:
                 QTimer.singleShot(2000, register_hotkey)

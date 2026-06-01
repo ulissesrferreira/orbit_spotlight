@@ -1,4 +1,4 @@
-# CtrlK Launcher
+# Orbit Spotlight
 
 Launcher rápido para Windows — busca arquivos, pastas e apps com `Ctrl+'`.
 
@@ -12,7 +12,7 @@ Pressione `Ctrl+'` em qualquer lugar para abrir o launcher. Digite para filtrar 
 
 A tela inicial (sem digitação) mostra:
 - Últimos 3 downloads
-- Itens abertos recentemente via CtrlK
+- Itens abertos recentemente via Orbit Spotlight
 - Apps mais usados como fallback
 
 A busca percorre Desktop, Documentos, Downloads, Imagens e OneDrive com até 5 níveis de profundidade, ordenando por recência e frequência de uso.
@@ -33,7 +33,7 @@ Ou manualmente:
 
 ```sh
 pip install -r requirements.txt
-python ctrlk.py
+python orbit_spotlight.py
 ```
 
 Para iniciar com o Windows:

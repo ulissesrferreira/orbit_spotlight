@@ -22,7 +22,7 @@ function New-LogonTask {
 }
 
 function Show-List {
-    $tasks = Get-ScheduledTask | Where-Object { $_.TaskName -like 'Autostart - *' -or $_.TaskName -eq 'CtrlK Launcher' } | Sort-Object TaskName
+    $tasks = Get-ScheduledTask | Where-Object { $_.TaskName -like 'Autostart - *' -or $_.TaskName -eq 'Orbit Spotlight' } | Sort-Object TaskName
     if (-not $tasks) { Write-Host '   (nenhum)'; return }
     $i = 1
     foreach ($t in $tasks) { Write-Host ("   {0}. {1}   [{2}]" -f $i, $t.TaskName, $t.State); $i++ }

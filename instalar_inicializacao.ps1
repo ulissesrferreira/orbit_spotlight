@@ -1,13 +1,13 @@
-# Configura o CtrlK Launcher para iniciar com o Windows.
+# Configura o Orbit Spotlight para iniciar com o Windows.
 # Metodo: Tarefa Agendada no logon, SEM atraso e com ALTA prioridade.
 # Isso faz o app subir logo no inicio (nao por ultimo, como a pasta Inicializar).
 
 $ErrorActionPreference = 'Stop'
-$taskName = 'CtrlK Launcher'
+$taskName = 'Orbit Spotlight'
 
 # Pasta deste script = pasta do projeto
 $workdir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script  = Join-Path $workdir 'ctrlk.py'
+$script  = Join-Path $workdir 'orbit_spotlight.py'
 
 # Localiza o pythonw
 $pyCmd = Get-Command pythonw.exe -ErrorAction SilentlyContinue
@@ -34,14 +34,14 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 try {
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
         -Settings $settings -Principal $principal `
-        -Description 'Inicia o CtrlK Launcher ao logon, sem atraso, alta prioridade' -Force | Out-Null
+        -Description 'Inicia o Orbit Spotlight ao logon, sem atraso, alta prioridade' -Force | Out-Null
 
     # Sucesso: remove o atalho da pasta Inicializar para nao abrir duas vezes
-    $old = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\CtrlK Launcher.lnk"
+    $old = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Orbit Spotlight.lnk"
     if (Test-Path $old) { Remove-Item $old -Force }
 
     Write-Host ""
-    Write-Host "[OK] CtrlK vai iniciar com o Windows (logon, sem atraso, ALTA prioridade)."
+    Write-Host "[OK] Orbit Spotlight vai iniciar com o Windows (logon, sem atraso, ALTA prioridade)."
     Write-Host "Estado da tarefa: $((Get-ScheduledTask -TaskName $taskName).State)"
 }
 catch {
