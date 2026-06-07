@@ -8,6 +8,7 @@ import sys
 import os
 import json
 import time
+import logging
 import subprocess
 import ctypes
 import ctypes.wintypes
@@ -21,7 +22,7 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect, QShortcut, QPushButton
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QEvent, QObject, QAbstractNativeEventFilter, QMimeData, QUrl, QPoint, QSize
-from PyQt5.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush, QPen, QPainterPath, QImageReader, QKeySequence, QDrag
+from PyQt5.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush, QPen, QPainterPath, QImageReader, QKeySequence, QDrag, QCursor
 
 # ─────────────────────────────────────────────
 # Prioridade do processo
@@ -53,7 +54,27 @@ _BROWSER_CLASSES = {
 }
 
 # Only these file types will appear in results
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".html", ".txt", ".json"}
+ALLOWED_EXTENSIONS = {
+    # imagens
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".bmp", ".ico", ".tiff",
+    # documentos
+    ".txt", ".md", ".pdf", ".csv", ".rtf",
+    # web / markup
+    ".html", ".htm", ".css", ".scss", ".sass", ".less", ".xml", ".yaml", ".yml",
+    # dados / config
+    ".json", ".toml", ".ini", ".env", ".conf", ".cfg", ".lock",
+    # código
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+    ".java", ".kt", ".kts", ".swift", ".go", ".rs", ".rb", ".php",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".dart", ".lua", ".sh", ".bat", ".ps1",
+    ".r", ".sql", ".graphql", ".proto",
+    # notebooks / data
+    ".ipynb",
+    # office / docs
+    ".docx", ".xlsx", ".pptx", ".odt", ".ods",
+    # misc dev
+    ".gitignore", ".editorconfig", ".dockerfile",
+}
 
 # Tipos que ganham miniatura (preview) ao inves do emoji
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"}
@@ -61,11 +82,53 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"}
 # File where we track app usage counts
 USAGE_FILE = Path(os.environ.get("APPDATA", "")) / "OrbitSpotlight" / "usage.json"
 
+# ─────────────────────────────────────────────
+# Logging estruturado (arquivo em %APPDATA%/OrbitSpotlight/orbit.log)
+# ─────────────────────────────────────────────
+LOG_FILE = USAGE_FILE.parent / "orbit.log"
+
+def _setup_logging() -> logging.Logger:
+    logger = logging.getLogger("orbit")
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        try:
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            h = logging.FileHandler(LOG_FILE, encoding="utf-8")
+            h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(h)
+        except Exception:
+            logger.addHandler(logging.NullHandler())
+    return logger
+
+log = _setup_logging()
+
 FILE_ICONS = {
-    ".jpg": "🖼️", ".jpeg": "🖼️", ".png": "🖼️", ".webp": "🖼️", ".gif": "🖼️", ".svg": "🖼️",
-    ".html": "🌐",
-    ".txt": "📃",
-    ".json": "📋",
+    # imagens
+    ".jpg": "🖼️", ".jpeg": "🖼️", ".png": "🖼️", ".webp": "🖼️",
+    ".gif": "🖼️", ".svg": "🖼️", ".bmp": "🖼️", ".ico": "🖼️", ".tiff": "🖼️",
+    # documentos
+    ".pdf": "📕", ".md": "📝", ".txt": "📃", ".csv": "📊", ".rtf": "📃",
+    # web
+    ".html": "🌐", ".htm": "🌐", ".css": "🎨", ".scss": "🎨", ".sass": "🎨",
+    ".less": "🎨", ".xml": "📋",
+    # dados / config
+    ".json": "📋", ".yaml": "📋", ".yml": "📋", ".toml": "📋",
+    ".ini": "⚙️", ".env": "⚙️", ".conf": "⚙️", ".cfg": "⚙️", ".lock": "🔒",
+    # código
+    ".py": "🐍", ".js": "🟨", ".ts": "🔷", ".jsx": "⚛️", ".tsx": "⚛️",
+    ".mjs": "🟨", ".cjs": "🟨",
+    ".java": "☕", ".kt": "🟣", ".kts": "🟣", ".swift": "🟠",
+    ".go": "🐹", ".rs": "🦀", ".rb": "💎", ".php": "🐘",
+    ".c": "🔵", ".cpp": "🔵", ".h": "🔵", ".hpp": "🔵",
+    ".cs": "🟦", ".dart": "🎯", ".lua": "🌙",
+    ".sh": "🖥️", ".bat": "🖥️", ".ps1": "🖥️",
+    ".r": "📊", ".sql": "🗄️", ".graphql": "📋", ".proto": "📋",
+    # notebooks
+    ".ipynb": "📓",
+    # office
+    ".docx": "📄", ".xlsx": "📊", ".pptx": "📊", ".odt": "📄", ".ods": "📊",
+    # misc
+    ".gitignore": "⚙️", ".editorconfig": "⚙️", ".dockerfile": "🐳",
 }
 
 
@@ -98,14 +161,42 @@ def _antigravity_icon_path() -> str | None:
 
 ANTIGRAVITY_ICON = _antigravity_icon_path()
 
-def open_in_antigravity(path: str) -> bool:
-    """Abre a pasta/arquivo no Antigravity IDE. Retorna True se iniciou."""
+def _antigravity_cli_path() -> str | None:
+    """Caminho do cli.js do Antigravity (CLI oficial, igual antigravity-ide.cmd)."""
     if not ANTIGRAVITY_EXE:
+        return None
+    cli = Path(ANTIGRAVITY_EXE).parent / "resources" / "app" / "out" / "cli.js"
+    return str(cli) if cli.exists() else None
+
+ANTIGRAVITY_CLI = _antigravity_cli_path()
+
+# Flag do Windows: não abre janela de console ao lançar via subprocess
+_CREATE_NO_WINDOW = 0x08000000
+
+def open_in_antigravity(path: str) -> bool:
+    """Abre a pasta/arquivo no Antigravity IDE. Retorna True se iniciou.
+
+    Usa o CLI oficial (cli.js com ELECTRON_RUN_AS_NODE=1) — o mesmo que o
+    `antigravity-ide.cmd` faz. É o caminho que conversa com a instância em
+    execução, abre a pasta e TRAZ a janela pra frente de forma confiável.
+    Lançar o .exe direto às vezes abre em segundo plano (parecia "não abrir").
+    """
+    if not ANTIGRAVITY_EXE:
+        log.error("open_in_antigravity: ANTIGRAVITY_EXE nao encontrado")
         return False
     try:
-        subprocess.Popen([ANTIGRAVITY_EXE, path])
+        if ANTIGRAVITY_CLI:
+            env = os.environ.copy()
+            env["ELECTRON_RUN_AS_NODE"] = "1"
+            log.info("open_in_antigravity: CLI cli.js path=%r", path)
+            subprocess.Popen([ANTIGRAVITY_EXE, ANTIGRAVITY_CLI, path],
+                             env=env, creationflags=_CREATE_NO_WINDOW)
+        else:
+            log.info("open_in_antigravity: fallback exe direto path=%r", path)
+            subprocess.Popen([ANTIGRAVITY_EXE, path])
         return True
     except Exception as e:
+        log.exception("open_in_antigravity: falhou")
         print(f"[OrbitSpotlight] Erro ao abrir no Antigravity: {e}")
         return False
 
@@ -188,13 +279,17 @@ class SearchWorker(QThread):
         self._cancelled = True
 
     @staticmethod
-    def _matches(name_lower: str, tokens: list[str]) -> bool:
-        """True se todos os tokens aparecerem no nome (busca por palavras separadas)."""
+    def _matches(name_lower: str, tokens: list[str],
+                 path_lower: str = "", is_path_query: bool = False) -> bool:
+        if is_path_query and path_lower:
+            normalized = path_lower.replace("\\", "/")
+            fragment = " ".join(tokens).replace("\\", "/").lstrip("/")
+            return fragment in normalized
         return all(t in name_lower for t in tokens)
 
     @staticmethod
     def _match_score(name_lower: str, tokens: list[str]) -> int:
-        """0 = começa com primeiro token, 1 = contém, 2 = só match parcial."""
+        """0 = começa com primeiro token, 1 = contém."""
         if name_lower.startswith(tokens[0]):
             return 0
         return 1
@@ -292,11 +387,12 @@ class SearchWorker(QThread):
         last   = _data.get("_last", {})
         folders, files, apps = [], [], []
         seen: set = set()
-        tokens = query.split()  # "promp lp" → ["promp", "lp"]
+        tokens = query.split()
+        is_path_query = any(sep in query for sep in ("/", "\\"))
 
         # 0. As proprias pastas-base sao candidatas (ex: "Downloads", "Documentos")
         for base in self.SEARCH_DIRS:
-            if self._matches(base.name.lower(), tokens):
+            if self._matches(base.name.lower(), tokens, str(base).lower(), is_path_query):
                 key = str(base)
                 if key not in seen:
                     seen.add(key)
@@ -312,7 +408,8 @@ class SearchWorker(QThread):
         for base in self.SEARCH_DIRS:
             if self._cancelled:
                 break
-            self._collect_from(base, tokens, folders, files, seen, depth=0, max_depth=5)
+            self._collect_from(base, tokens, folders, files, seen,
+                                depth=0, max_depth=5, is_path_query=is_path_query)
             if len(folders) >= 12 and len(files) >= 8:
                 break
 
@@ -346,7 +443,7 @@ class SearchWorker(QThread):
 
     def _collect_from(self, path: Path, tokens: list[str],
                       folders: list, files: list, seen: set,
-                      depth: int, max_depth: int):
+                      depth: int, max_depth: int, is_path_query: bool = False):
         """Busca recursiva usando iterdir — mais confiável com OneDrive."""
         if depth > max_depth or self._is_excluded(path):
             return
@@ -364,7 +461,7 @@ class SearchWorker(QThread):
                 except OSError:
                     continue
 
-                if self._matches(item.name.lower(), tokens):
+                if self._matches(item.name.lower(), tokens, key.lower(), is_path_query):
                     seen.add(key)
                     if is_dir:
                         folders.append({
@@ -385,7 +482,7 @@ class SearchWorker(QThread):
 
                 if is_dir and depth < max_depth and not self._is_excluded(item):
                     self._collect_from(item, tokens, folders, files, seen,
-                                       depth + 1, max_depth)
+                                       depth + 1, max_depth, is_path_query)
         except PermissionError:
             pass
 
@@ -575,11 +672,27 @@ class ResultRow(QFrame):
         if not path or self.result.get("type") not in ("file",):
             return
         self._dragging = True
+        # Pausa o poll de foco para não fechar a janela durante o drag
+        launcher = self._find_launcher()
+        if launcher:
+            launcher._focus_poll.stop()
         mime = QMimeData()
         mime.setUrls([QUrl.fromLocalFile(path)])
         drag = QDrag(self)
         drag.setMimeData(mime)
         drag.exec_(Qt.CopyAction)
+        # Retoma o poll após o drag terminar (com margem de segurança)
+        if launcher:
+            QTimer.singleShot(300, launcher._focus_poll.start)
+
+    def _find_launcher(self):
+        """Sobe a hierarquia de widgets para encontrar o Launcher."""
+        p = self.parent()
+        while p is not None:
+            if isinstance(p, Launcher):
+                return p
+            p = p.parent()
+        return None
 
     def mouseReleaseEvent(self, event):
         # Só abre se foi um clique simples (sem arraste)
@@ -597,12 +710,15 @@ class Launcher(QWidget):
     _hide_signal   = pyqtSignal()
     _toggle_signal = pyqtSignal()
 
+    _VK_MENU = 0x12  # Virtual key code do Alt no Windows
+
     def __init__(self):
         super().__init__()
         self._results: list = []
         self._rows: list = []
         self._sel: int = -1
         self._worker = None
+        self._alt_was_down = False
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -623,6 +739,11 @@ class Launcher(QWidget):
         self._focus_poll = QTimer(self)
         self._focus_poll.setInterval(150)
         self._focus_poll.timeout.connect(self._check_focus)
+
+        # Polling do Alt via GetAsyncKeyState (mais confiável que hooks no Windows)
+        self._alt_poll = QTimer(self)
+        self._alt_poll.setInterval(50)
+        self._alt_poll.timeout.connect(self._check_alt_state)
 
     # ── UI ────────────────────────────────────
     def _build_ui(self):
@@ -789,7 +910,11 @@ class Launcher(QWidget):
         QTimer.singleShot(120, self._input.setFocus)
 
         self._fire_search("")
-        self._focus_poll.start()
+        self._alt_was_down = False
+        log.info("do_show: janela exibida; polls (foco+alt) agendados em 400ms")
+        # Adia os polls para depois dos timers de foco (0, 50, 120 ms) terem disparado
+        QTimer.singleShot(400, self._focus_poll.start)
+        QTimer.singleShot(400, self._alt_poll.start)
 
     # ── Search ────────────────────────────────
     def _on_text(self, text):
@@ -842,6 +967,9 @@ class Launcher(QWidget):
 
     def _check_focus(self):
         if self.isVisible() and not self.isActiveWindow():
+            if ctypes.windll.user32.GetAsyncKeyState(self._VK_MENU) & 0x8000:
+                return
+            log.info("check_focus: escondendo (perdeu foco)")
             self.hide()
 
     def eventFilter(self, obj: QObject, event: QEvent):
@@ -857,6 +985,41 @@ class Launcher(QWidget):
                 self._open(self._sel)
                 return True
         return super().eventFilter(obj, event)
+
+    def _check_alt_state(self):
+        """Polling de 50ms via GetAsyncKeyState — detecta Alt com borda de subida."""
+        pressed = bool(ctypes.windll.user32.GetAsyncKeyState(self._VK_MENU) & 0x8000)
+        if pressed != self._alt_was_down:
+            log.debug("alt poll: estado -> %s (visivel=%s, ativa=%s)",
+                      pressed, self.isVisible(), self.isActiveWindow())
+        if pressed and not self._alt_was_down:
+            self._on_alt_key()
+        self._alt_was_down = pressed
+
+    def _on_alt_key(self):
+        """Abre no Antigravity a pasta sob o cursor quando Alt é pressionado.
+
+        Usa hit-test geométrico (QCursor.pos) em vez de underMouse(): este é
+        furado quando a linha tem widgets-filhos (os QLabels de nome/subtítulo
+        cobrem quase toda a largura), retornando False sobre o texto.
+        """
+        pos = QCursor.pos()
+        log.info("on_alt_key: cursor=(%d,%d) rows=%d results=%d",
+                 pos.x(), pos.y(), len(self._rows), len(self._results))
+        for i, row in enumerate(self._rows):
+            if i >= len(self._results):
+                break
+            rtype = self._results[i].get("type")
+            inside = row.isVisible() and row.rect().contains(row.mapFromGlobal(pos))
+            log.debug("  row %d type=%s visivel=%s dentro=%s", i, rtype, row.isVisible(), inside)
+            if rtype != "folder":
+                continue
+            if inside:
+                log.info("on_alt_key: MATCH pasta idx=%d path=%s",
+                         i, self._results[i].get("path"))
+                self._open_antigravity(i)
+                return
+        log.info("on_alt_key: nenhuma pasta sob o cursor")
 
     def _move_sel(self, delta: int):
         if not self._rows:
@@ -886,14 +1049,18 @@ class Launcher(QWidget):
     def _open_antigravity(self, idx: int):
         """Abre a pasta selecionada no Antigravity IDE (botão da linha)."""
         if not (0 <= idx < len(self._results)):
+            log.warning("_open_antigravity: idx %d fora do intervalo", idx)
             return
         path = self._results[idx]["path"]
+        log.info("_open_antigravity: idx=%d path=%s", idx, path)
         record_usage(path)
-        open_in_antigravity(path)
+        ok = open_in_antigravity(path)
+        log.info("_open_antigravity: resultado=%s", ok)
         self.hide()
 
     def hide(self):
         self._focus_poll.stop()
+        self._alt_poll.stop()
         super().hide()
 
     def closeEvent(self, event):
