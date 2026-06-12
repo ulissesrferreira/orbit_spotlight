@@ -21,20 +21,53 @@ $user = "$env:USERDOMAIN\$env:USERNAME"
 
 Write-Host "Registrando tarefa de inicializacao..."
 
-try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-
-$action  = New-ScheduledTaskAction -Execute $py -Argument ('"' + $script + '" --tray') -WorkingDirectory $workdir
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-$trigger.Delay = 'PT0S'
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable `
-            -MultipleInstances IgnoreNew -Priority 1
-$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Inicia o Orbit Spotlight no logon, sem atraso e com prioridade.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$user</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$user</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$py</Command>
+      <Arguments>"$script" --tray</Arguments>
+      <WorkingDirectory>$workdir</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"@
 
 try {
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-        -Settings $settings -Principal $principal `
-        -Description 'Inicia o Orbit Spotlight ao logon, sem atraso, alta prioridade' -Force | Out-Null
+    $xmlPath = Join-Path $env:TEMP "OrbitSpotlight_task.xml"
+    [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::Unicode)
+    
+    # Executa o schtasks para criar a tarefa importando o XML
+    & schtasks.exe /Create /TN $taskName /XML "$xmlPath" /F | Out-Null
+    
+    # Limpa o arquivo temporario
+    Remove-Item $xmlPath -ErrorAction SilentlyContinue
 
     # Sucesso: remove o atalho da pasta Inicializar para nao abrir duas vezes
     $old = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Orbit Spotlight.lnk"
@@ -48,8 +81,6 @@ catch {
     Write-Host ""
     Write-Host "[AVISO] Nao foi possivel criar a Tarefa Agendada:"
     Write-Host "        $($_.Exception.Message)"
-    Write-Host "        Tente rodar este arquivo com BOTAO DIREITO > Executar como administrador."
-    Write-Host "        (O atalho na pasta Inicializar continua funcionando como alternativa.)"
 }
 
 Write-Host ""

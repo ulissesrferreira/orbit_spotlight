@@ -6,19 +6,58 @@ $explorer = Join-Path $env:WINDIR 'explorer.exe'
 function New-LogonTask {
     param([string]$Name, [string]$Execute, [string]$Arg, [string]$WorkDir)
 
-    if ([string]::IsNullOrEmpty($Arg)) {
-        if ($WorkDir) { $action = New-ScheduledTaskAction -Execute $Execute -WorkingDirectory $WorkDir }
-        else          { $action = New-ScheduledTaskAction -Execute $Execute }
-    } else {
-        if ($WorkDir) { $action = New-ScheduledTaskAction -Execute $Execute -Argument $Arg -WorkingDirectory $WorkDir }
-        else          { $action = New-ScheduledTaskAction -Execute $Execute -Argument $Arg }
-    }
+    $userDomain = $env:USERDOMAIN
+    $userName = $env:USERNAME
+    $fullUser = "$userDomain\$userName"
+    
+    $executeEsc = [System.Security.SecurityElement]::Escape($Execute)
+    $argumentsEsc = if ($Arg) { [System.Security.SecurityElement]::Escape($Arg) } else { "" }
+    $workDirEsc = if ($WorkDir) { [System.Security.SecurityElement]::Escape($WorkDir) } else { "" }
 
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger.Delay = 'PT0S'
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -MultipleInstances IgnoreNew
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Inicia o app $Name no logon, sem atraso e com prioridade.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$fullUser</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$fullUser</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$executeEsc</Command>
+      $(if ($argumentsEsc) { "<Arguments>$argumentsEsc</Arguments>" })
+      $(if ($workDirEsc) { "<WorkingDirectory>$workDirEsc</WorkingDirectory>" })
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+    $xmlPath = Join-Path $env:TEMP "Autostart_task_temp.xml"
+    [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::Unicode)
+    
+    & schtasks.exe /Create /TN $Name /XML "$xmlPath" /F | Out-Null
+    
+    Remove-Item $xmlPath -ErrorAction SilentlyContinue
 }
 
 function Show-List {
