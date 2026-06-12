@@ -72,6 +72,8 @@ ALLOWED_EXTENSIONS = {
     ".ipynb",
     # office / docs
     ".docx", ".xlsx", ".pptx", ".odt", ".ods",
+    # fontes
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
     # misc dev
     ".gitignore", ".editorconfig", ".dockerfile",
 }
@@ -127,6 +129,8 @@ FILE_ICONS = {
     ".ipynb": "📓",
     # office
     ".docx": "📄", ".xlsx": "📊", ".pptx": "📊", ".odt": "📄", ".ods": "📊",
+    # fontes
+    ".ttf": "🔤", ".otf": "🔤", ".woff": "🔤", ".woff2": "🔤", ".eot": "🔤",
     # misc
     ".gitignore": "⚙️", ".editorconfig": "⚙️", ".dockerfile": "🐳",
 }
@@ -240,6 +244,11 @@ class SearchWorker(QThread):
         (p for p in [_home / "OneDrive", _home / "OneDrive - Personal"] if p.exists()),
         None
     )
+    # Pasta de fontes do usuário (Local AppData) e do sistema
+    _local_appdata = Path(os.environ.get("LOCALAPPDATA", str(_home / "AppData" / "Local")))
+    _user_fonts = _local_appdata / "Microsoft" / "Windows" / "Fonts"
+    _system_fonts = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "Fonts"
+
     SEARCH_DIRS = [d for d in [
         _home / "Desktop",
         (_onedrive / "\u00c1rea de Trabalho") if _onedrive else None,
@@ -250,6 +259,8 @@ class SearchWorker(QThread):
         _home / "Downloads",
         _home / "Pictures",
         _onedrive                              if _onedrive else None,
+        _user_fonts,
+        _system_fonts,
         _home,
     ] if d is not None and Path(d).exists()]
 
@@ -390,6 +401,34 @@ class SearchWorker(QThread):
         tokens = query.split()
         is_path_query = any(sep in query for sep in ("/", "\\"))
 
+        # Suporte para caminhos absolutos diretos colados pelo usuário
+        try:
+            expanded_query = os.path.expandvars(query)
+            query_path = Path(expanded_query)
+            if query_path.is_absolute() and query_path.exists():
+                key = str(query_path.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    if query_path.is_dir():
+                        folders.append({
+                            "name": query_path.name,
+                            "path": key,
+                            "type": "folder",
+                            "icon": "📁",
+                            "subtitle": str(query_path.parent),
+                        })
+                    else:
+                        suffix = query_path.suffix.lower()
+                        files.append({
+                            "name": query_path.name,
+                            "path": key,
+                            "type": "file",
+                            "icon": FILE_ICONS.get(suffix, "📄"),
+                            "subtitle": str(query_path.parent),
+                        })
+        except Exception:
+            pass
+
         # 0. As proprias pastas-base sao candidatas (ex: "Downloads", "Documentos")
         for base in self.SEARCH_DIRS:
             if self._matches(base.name.lower(), tokens, str(base).lower(), is_path_query):
@@ -494,6 +533,10 @@ class SearchWorker(QThread):
 
     def _is_excluded(self, path: Path) -> bool:
         p = str(path).lower()
+        # Não excluir a pasta de fontes do usuário (que fica dentro do AppData)
+        user_fonts = str(self._user_fonts).lower()
+        if p == user_fonts or p.startswith(user_fonts + os.sep):
+            return False
         if any(p == ex or p.startswith(ex + os.sep) for ex in self.EXCLUDED_DIRS):
             return True
         return path.name.lower() in self.EXCLUDED_NAMES
