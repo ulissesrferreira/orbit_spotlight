@@ -1065,6 +1065,11 @@ class Launcher(QWidget):
 
     def closeEvent(self, event):
         keyboard.unhook_all_hotkeys()
+        # Limpa o RegisterHotKey do Win32 (se registrado)
+        try:
+            ctypes.windll.user32.UnregisterHotKey(None, 0x0001)
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
@@ -1112,36 +1117,167 @@ def main():
     launcher = Launcher()
 
     # Hotkey global Ctrl+' para ABNT2
-    def toggle_launcher():
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
-        buf  = ctypes.create_unicode_buffer(256)
-        ctypes.windll.user32.GetClassNameW(hwnd, buf, 256)
+    # Anti-double-toggle: quando ambos os hooks (Win32 + keyboard) estão ativos,
+    # Ctrl+' pode disparar toggle_launcher 2x. Debounce de 300ms impede isso.
+    _last_toggle = [0.0]
 
-        # Agora funciona em qualquer navegador/browser
+    def toggle_launcher():
+        now = time.monotonic()
+        if now - _last_toggle[0] < 0.3:
+            return  # ignora disparo duplicado
+        _last_toggle[0] = now
+
         launcher._toggle_signal.emit()
 
-    # Registra o atalho com retentativas. Ao iniciar com o Windows, o app pode
-    # subir antes do shell (explorer) estar pronto e o hook global do teclado
-    # falhar silenciosamente. As retentativas garantem que o Ctrl+' engate
-    # assim que o desktop estiver disponivel.
-    _hotkey_state = {"ok": False, "tries": 0}
+    # ── Estratégia dupla para o atalho global ──────────────────────────
+    # 1. Win32 RegisterHotKey (primário) — robusto, sobrevive a sleep/UAC.
+    # 2. keyboard library (fallback)     — WH_KEYBOARD_LL hook, pode morrer.
+    # 3. Watchdog periódico              — re-registra se o hook morrer.
 
-    def register_hotkey():
-        if _hotkey_state["ok"]:
-            return
-        _hotkey_state["tries"] += 1
+    HOTKEY_ID    = 0x0001
+    MOD_CONTROL  = 0x0002
+    MOD_NOREPEAT = 0x4000
+    WM_HOTKEY    = 0x0312
+
+    # Detecta o VK do apóstrofo dinamicamente via VkKeyScanW.
+    # Isso funciona em qualquer layout (ABNT2, US-Intl, etc.).
+    _vk_scan = ctypes.windll.user32.VkKeyScanW(ord("'"))
+    if _vk_scan == -1:
+        # Fallback: VK_OEM_7 é o padrão em US layout
+        VK_APOSTROPHE = 0xDE
+        log.warning("hotkey: VkKeyScanW(') retornou -1, usando fallback 0xDE")
+    else:
+        VK_APOSTROPHE = _vk_scan & 0xFF
+        log.info("hotkey: VkKeyScanW(') = 0x%02X (VK=0x%02X)", _vk_scan, VK_APOSTROPHE)
+
+    _hotkey_state = {
+        "win32_ok": False,       # RegisterHotKey ativo
+        "keyboard_ok": False,    # keyboard lib ativo
+        "keyboard_hook_id": None,
+        "tries": 0,
+    }
+
+    # ── Método 1: Win32 RegisterHotKey (mais confiável) ──────
+    class HotkeyFilter(QAbstractNativeEventFilter):
+        """Intercepta WM_HOTKEY no event loop do Qt."""
+        def nativeEventFilter(self, eventType, message):
+            if eventType == b"windows_generic_MSG":
+                try:
+                    msg = ctypes.wintypes.MSG.from_address(int(message))
+                    if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                        toggle_launcher()
+                        return True, 0
+                except Exception:
+                    pass
+            return False, 0
+
+    _hotkey_filter = HotkeyFilter()
+
+    def _register_win32_hotkey():
+        """Tenta registrar via RegisterHotKey do Windows."""
+        if _hotkey_state["win32_ok"]:
+            return True
         try:
-            keyboard.add_hotkey("ctrl+'", toggle_launcher)
-            _hotkey_state["ok"] = True
-        except Exception as e:
-            print(f"[OrbitSpotlight] Falha ao registrar atalho (tentativa "
-                  f"{_hotkey_state['tries']}): {e}")
-            if _hotkey_state["tries"] < 10:
-                QTimer.singleShot(2000, register_hotkey)
+            # Tenta desregistrar primeiro (caso tenha sobrado de instância anterior)
+            ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_ID)
+        except Exception:
+            pass
+        ok = ctypes.windll.user32.RegisterHotKey(
+            None, HOTKEY_ID, MOD_CONTROL | MOD_NOREPEAT, VK_APOSTROPHE
+        )
+        if ok:
+            _hotkey_state["win32_ok"] = True
+            app.installNativeEventFilter(_hotkey_filter)
+            log.info("hotkey: RegisterHotKey(Ctrl+VK=0x%02X) OK", VK_APOSTROPHE)
+        else:
+            err = ctypes.GetLastError()
+            log.warning("hotkey: RegisterHotKey falhou (err=%d)", err)
+        return bool(ok)
 
-    # 1a tentativa apos 2s (da tempo do shell carregar no boot); reforca depois.
-    QTimer.singleShot(2000, register_hotkey)
-    QTimer.singleShot(6000, register_hotkey)
+    # ── Método 2: keyboard library (fallback) ──────
+    def _register_keyboard_hotkey():
+        """Registra via biblioteca keyboard (WH_KEYBOARD_LL hook)."""
+        if _hotkey_state["keyboard_ok"]:
+            return True
+        try:
+            # Remove hooks antigos antes de re-registrar
+            try:
+                keyboard.unhook_all_hotkeys()
+            except Exception:
+                pass
+            hook = keyboard.add_hotkey("ctrl+'", toggle_launcher)
+            _hotkey_state["keyboard_ok"] = True
+            _hotkey_state["keyboard_hook_id"] = hook
+            log.info("hotkey: keyboard.add_hotkey(ctrl+') OK")
+            return True
+        except Exception as e:
+            log.warning("hotkey: keyboard.add_hotkey falhou: %s", e)
+            _hotkey_state["keyboard_ok"] = False
+            return False
+
+    # ── Verificação de saúde do hook ──────
+    def _test_keyboard_hook_alive() -> bool:
+        """Verifica se o hook WH_KEYBOARD_LL do keyboard ainda está ativo.
+        
+        Checa se a thread do listener do keyboard ainda está rodando.
+        Se o Windows matou o hook, a thread morre ou os hooks internos ficam vazios.
+        """
+        try:
+            listener = keyboard._listener
+            if listener is None:
+                return False
+            # Verifica se a thread de listening ainda está viva
+            if hasattr(listener, 'listening') and not listener.listening:
+                return False
+            # Verifica se ainda tem hooks registrados
+            if hasattr(keyboard, '_hotkeys') and not keyboard._hotkeys:
+                return False
+            return True
+        except Exception:
+            return False
+
+    # ── Registro inicial + watchdog ──────
+    def register_all():
+        """Tenta ambos os métodos de registro."""
+        _hotkey_state["tries"] += 1
+        attempt = _hotkey_state["tries"]
+
+        win32_ok = _register_win32_hotkey()
+        kb_ok = _register_keyboard_hotkey()
+
+        if win32_ok or kb_ok:
+            log.info("hotkey: registro OK (tentativa %d, win32=%s, keyboard=%s)",
+                     attempt, win32_ok, kb_ok)
+        else:
+            log.error("hotkey: AMBOS falharam (tentativa %d)", attempt)
+            if attempt < 15:
+                QTimer.singleShot(3000, register_all)
+
+    def watchdog_check():
+        """Verificação periódica — re-registra se ambos os hooks morreram."""
+        win32_alive = _hotkey_state["win32_ok"]
+        kb_alive = _hotkey_state["keyboard_ok"] and _test_keyboard_hook_alive()
+
+        if not kb_alive and _hotkey_state["keyboard_ok"]:
+            log.warning("watchdog: hook keyboard morreu — re-registrando")
+            _hotkey_state["keyboard_ok"] = False
+            _register_keyboard_hotkey()
+
+        if not win32_alive and not kb_alive:
+            log.warning("watchdog: AMBOS os hooks mortos — re-registrando tudo")
+            _hotkey_state["win32_ok"] = False
+            register_all()
+
+    # 1a tentativa após 1.5s (dá tempo do shell carregar no boot)
+    QTimer.singleShot(1500, register_all)
+    # Reforço extra no boot
+    QTimer.singleShot(5000, register_all)
+
+    # Watchdog a cada 30s para detectar hooks mortos e re-registrar
+    _watchdog = QTimer()
+    _watchdog.setInterval(30_000)
+    _watchdog.timeout.connect(watchdog_check)
+    QTimer.singleShot(10_000, _watchdog.start)
 
 
     act_show.triggered.connect(launcher._do_show)
